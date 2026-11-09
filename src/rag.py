@@ -69,8 +69,9 @@ def retrieve(query, k=2):
 # TODO R3: load the tokenizer and model for GENERATOR_MODEL_NAME
 # (google/flan-t5-base) with transformers' AutoTokenizer and
 # AutoModelForSeq2SeqLM. Move the model to `device` and put it in eval mode.
-tokenizer = ...
-generator = ...
+tokenizer = AutoTokenizer.from_pretrained(GENERATOR_MODEL_NAME)
+generator = AutoModelForSeq2SeqLM.from_pretrained(GENERATOR_MODEL_NAME).to(device)
+generator.eval()
 
 
 def load_prompt(version):
@@ -84,7 +85,8 @@ def build_prompt(question, context, version=None):
     The template comes from load_prompt(version or PROMPT_VERSION) and has
     {context} and {question} placeholders.
     """
-    raise NotImplementedError("TODO R4: fill the prompt template")
+    template = load_prompt(version or PROMPT_VERSION)
+    return template.format(context=context, question=question)
 
 
 def generate_answer(prompt):
@@ -96,14 +98,22 @@ def generate_answer(prompt):
       torch.inference_mode();
     - decode the output, skipping special tokens.
     """
-    raise NotImplementedError("TODO R4: write generate_answer")
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=False).to(device)
+    if inputs["input_ids"].shape[1] > 512:
+        raise ValueError(
+            "Prompt exceeds the 512 token budget. Reduce k or passage length."
+        )
+    with torch.inference_mode():
+        output = generator.generate(**inputs, max_new_tokens=64, do_sample=False)
+    return tokenizer.decode(output[0], skip_special_tokens=True)
 
 
 # ------------------------------------------------- Module 2: policy
 # TODO R5: choose the threshold from the similarity scores you printed in
 # Module 1, Task 3: below every in-scope question, above the clearly
 # out-of-scope ones.
-SIMILARITY_THRESHOLD = ...
+# Module 1 scores: in-scope >= 0.42, clearly out-of-scope <= 0.10.
+SIMILARITY_THRESHOLD = 0.25
 
 
 def should_refuse(hits):
@@ -112,7 +122,7 @@ def should_refuse(hits):
     TODO R6: return True when there are no hits, or when the top hit's
     similarity is below SIMILARITY_THRESHOLD.
     """
-    return False  # placeholder: never refuses, i.e. no policy yet
+    return not hits or hits[0]["similarity"] < SIMILARITY_THRESHOLD
 
 
 # ------------------------------------------------- the agent
