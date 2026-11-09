@@ -28,6 +28,10 @@
     "price": {
       "passed": 11,
       "total": 12
+    },
+    "exchange": {
+      "passed": 2,
+      "total": 3
     }
   }
 }
