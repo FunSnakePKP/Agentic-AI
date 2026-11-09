@@ -39,9 +39,9 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # connect to the collection ingest.py built: same path, same name, but get
 # it rather than create it. If it says the collection doesn't exist, run
 # `python -m src.ingest` first.
-embedding_model = ...
-_client = ...
-_collection = ...
+embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME, device="cpu")
+_client = chromadb.PersistentClient(path=str(DB_PATH))
+_collection = _client.get_collection(COLLECTION_NAME)
 
 
 def retrieve(query, k=2):
@@ -55,7 +55,14 @@ def retrieve(query, k=2):
     "similarity" keys. Note that Chroma reports *distances*, not
     similarities.
     """
-    raise NotImplementedError("TODO R2: query Chroma and shape the results")
+    query_vector = embedding_model.encode(query, normalize_embeddings=True).tolist()
+    results = _collection.query(query_embeddings=[query_vector], n_results=k)
+    hits = []
+    for doc_id, text, distance in zip(
+        results["ids"][0], results["documents"][0], results["distances"][0]
+    ):
+        hits.append({"id": doc_id, "text": text, "similarity": 1 - distance})
+    return hits
 
 
 # ------------------------------------------------- Module 2: generation
