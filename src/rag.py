@@ -6,6 +6,7 @@ half with a versioned prompt (TODO R3-R4) and the policy check
 and records what the monitoring in Module 5 needs. It's already written.
 """
 import difflib
+import math
 import re
 import time
 from pathlib import Path
@@ -50,10 +51,11 @@ _collection = _client.get_collection(COLLECTION_NAME)
 # the closest word in the knowledge base's own vocabulary. 0.85 is strict on
 # purpose: at 0.8, "never" became "every" and "change" became "exchanges".
 SPELLING_CUTOFF = 0.85
-_VOCABULARY = sorted({
-    w for doc in _collection.get(include=["documents"])["documents"]
-    for w in re.findall(r"[a-z]+", doc.lower())
-})
+
+# Every document, loaded once for spelling correction and keyword search.
+# The knowledge base is small (policy chunks + price rows), so this is cheap.
+_ALL = _collection.get(include=["documents", "metadatas", "embeddings"])
+_VOCABULARY = sorted({w for doc in _ALL["documents"] for w in re.findall(r"[a-z]+", doc.lower())})
 
 
 def correct_spelling(text):
@@ -66,6 +68,44 @@ def correct_spelling(text):
         close = difflib.get_close_matches(lower, _VOCABULARY, n=1, cutoff=SPELLING_CUTOFF)
         return close[0] if close else word
     return re.sub(r"[A-Za-z]+", fix, text)
+
+
+# Hybrid search (homework Challenge): to the embedding model, "X200" and
+# "X250" mean nearly the same thing and serial codes like "LMX-201" mean
+# nothing, so vector search returns a sibling product's price row. A keyword
+# (BM25) search over the same documents matches them exactly. It only steps in
+# when the question contains a model identifier (letters and digits together,
+# e.g. "x300", "lmx-201") that appears in some document.
+_TOKEN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_IDENTIFIER = re.compile(r"(?=.*[a-z])(?=.*\d)")
+_DOC_TOKENS = [_TOKEN.findall(doc.lower()) for doc in _ALL["documents"]]
+_AVG_LEN = sum(map(len, _DOC_TOKENS)) / max(len(_DOC_TOKENS), 1)
+_DOC_FREQ = {}
+for _tokens in _DOC_TOKENS:
+    for _t in set(_tokens):
+        _DOC_FREQ[_t] = _DOC_FREQ.get(_t, 0) + 1
+
+
+def _bm25(query_tokens, i, k1=1.5, b=0.75):
+    """BM25 score of document i; shorter documents win ties ("X300" beats "Pro X300")."""
+    tokens, n = _DOC_TOKENS[i], len(_DOC_TOKENS)
+    score = 0.0
+    for t in set(query_tokens):
+        tf = tokens.count(t)
+        if tf:
+            idf = math.log(1 + (n - _DOC_FREQ[t] + 0.5) / (_DOC_FREQ[t] + 0.5))
+            score += idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * len(tokens) / _AVG_LEN))
+    return score
+
+
+def keyword_match(query):
+    """Index of the best document that contains a model identifier from the query, or None."""
+    query_tokens = _TOKEN.findall(query.lower())
+    identifiers = {t for t in query_tokens if _IDENTIFIER.match(t) and t in _DOC_FREQ}
+    candidates = [i for i, tokens in enumerate(_DOC_TOKENS) if identifiers & set(tokens)]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda i: _bm25(query_tokens, i))
 
 
 def retrieve(query, k=2):
@@ -96,6 +136,18 @@ def retrieve(query, k=2):
             "similarity": 1 - distance,
             "source": (meta or {}).get("source", "policy"),
         })
+
+    # Hybrid: an exact keyword match on a model identifier goes first.
+    best = keyword_match(query)
+    if best is not None and (not hits or hits[0]["id"] != _ALL["ids"][best]):
+        similarity = float(sum(q * d for q, d in zip(query_vector, _ALL["embeddings"][best])))
+        exact = {
+            "id": _ALL["ids"][best],
+            "text": _ALL["documents"][best],
+            "similarity": similarity,
+            "source": (_ALL["metadatas"][best] or {}).get("source", "policy"),
+        }
+        hits = [exact] + [h for h in hits if h["id"] != exact["id"]][: k - 1]
     return hits
 
 

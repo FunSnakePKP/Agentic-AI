@@ -38,8 +38,11 @@ nothing enforces or tests is a wish, not a policy.
   product *and* asks about another ("Is the X100 cheaper than an iPhone?")
   passes the check, and a generic word that appears in a product name
   (e.g. "screen", "speaker") can match a question about something else.
-  Sibling models ("X200" vs "X250") can also be confused by the embedding
-  model; the Challenge in `homework/Homework.md` (hybrid search) is the fix.
+  Sibling models ("X200" vs "X250") and serial codes ("LMX-201") confuse the
+  embedding model; this is handled by hybrid search in `retrieve()` (an exact
+  model identifier in the question puts its row first) and tested by the
+  `price_exact_*` golden rows. Questions that name a product without an
+  identifier ("the speaker") still rely on vector search alone.
 - **P4 has no automated test yet.**
 
 ## Changing this policy
