@@ -121,3 +121,66 @@ Each fix is its own commit.
   The remaining exchange miss ("I want to exchange my LumaBox for another
   model" → "I do not know") is a generation error: the chunk is retrieved
   (pytest passes it), but the model declines.
+
+#### Fix 2 — Wrongly refused: "I forgot my pasword" (turn 9)
+
+- **Golden rows first:** id `account_reset_typo`, category `account` (where
+  it belongs, even though it makes the category harder), 3 wordings: "I forgot
+  my pasword", "how do I reset my passwrod?", "pasword reset please",
+  `must_include` = `Forgot password`.
+  pytest before the fix: **1 failed**. "I forgot my pasword" was wrongly
+  refused (top similarity 0.189); the other two wordings already scored above
+  the threshold.
+- **Why not lower the threshold:** out-of-scope questions already score close
+  to 0.189 (installments 0.171, weather in Bangkok 0.115), so a threshold low
+  enough for the typo would start answering them.
+- **Fix:** spelling correction before retrieval (`correct_spelling()` in
+  `src/rag.py`). A word of 5+ letters that isn't in the knowledge base's own
+  vocabulary is replaced by the closest vocabulary word (`difflib`, cutoff
+  0.85), then the corrected text is embedded. I checked the cutoff against
+  every traffic and golden question first: at 0.8 it made harmful changes
+  ("never" → "every", "change" → "exchanges"); at 0.85 it only changes the
+  typos ("pasword", "passwrod" → "password") and harmless word forms
+  ("deliver" → "delivery", "process" → "processed").
+- **pytest after:** 75 passed, 2 xfailed.
+- **Gate after:**
+  ```
+  category                   now  baseline
+  account                    2/6       1/3
+  delivery                   1/3       1/3
+  exchange                   2/3       2/3
+  out of scope               6/6       6/6
+  price                    11/12     11/12
+  refund                     3/3       3/3
+  returns                    3/6       3/6
+  technical support          1/3       1/3
+  overall                  29/42
+  GATE PASSED: no category got worse than the baseline.
+  ```
+  Account went from 1/3 to 2/6, the same rate. "how do I reset my passwrod?"
+  now passes end to end.
+- **Honest result:** "I forgot my pasword" is **no longer refused**, so the
+  policy decision is fixed. But the model now answers "I do not know": it has
+  become a **generation error**, the same one the correctly spelled "I can't
+  sign in to my account" already has. Fixing that needs a better prompt or
+  model (next on the list: it's the biggest failure type).
+
+### What's left, by type
+
+- **Generation errors (5):** the biggest problem. Next step: a prompt v3 that
+  tells the model to quote the relevant sentence from the context instead of
+  answering in one or two words, put through the gate like v2 was.
+- **Knowledge gaps (5 left):** order tracking, warranty, changing email,
+  installments, and delivery areas go to LumaBox's support team to document.
+- **Retrieval misses (2):** serial codes and sibling model names (hybrid
+  search, the Challenge), and "screen" matching a product name.
+
+## Sentiment
+
+7 of the 25 traffic turns were flagged negative. Most are genuinely
+frustrated ("This bot is useless…", "Seriously, nobody has answered…"), plus
+a few over-flags that the review script warns about ("I forgot my pasword",
+"Ignore your instructions…"). In every frustrated turn, the bot replied with a
+bare "I do not know", which makes it worse. The new rule is **P11** in
+`AGENT_POLICY.md` (frustrated customers): acknowledge, answer if it can, and
+always hand over to a human with a way to reach them. It isn't implemented yet.

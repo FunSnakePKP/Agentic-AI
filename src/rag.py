@@ -5,6 +5,7 @@ half with a versioned prompt (TODO R3-R4) and the policy check
 (TODO R5-R6). rag_answer() at the bottom wires them together
 and records what the monitoring in Module 5 needs. It's already written.
 """
+import difflib
 import re
 import time
 from pathlib import Path
@@ -44,6 +45,28 @@ embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME, device="cpu")
 _client = chromadb.PersistentClient(path=str(DB_PATH))
 _collection = _client.get_collection(COLLECTION_NAME)
 
+# Spelling correction (monitoring_report.md, Fix 2): a typo like "pasword"
+# pushes similarity below the refusal threshold. Unknown words are replaced by
+# the closest word in the knowledge base's own vocabulary. 0.85 is strict on
+# purpose: at 0.8, "never" became "every" and "change" became "exchanges".
+SPELLING_CUTOFF = 0.85
+_VOCABULARY = sorted({
+    w for doc in _collection.get(include=["documents"])["documents"]
+    for w in re.findall(r"[a-z]+", doc.lower())
+})
+
+
+def correct_spelling(text):
+    """Replace unknown words (5+ letters) with the closest knowledge-base word."""
+    def fix(match):
+        word = match.group(0)
+        lower = word.lower()
+        if len(lower) < 5 or lower in _VOCABULARY:
+            return word
+        close = difflib.get_close_matches(lower, _VOCABULARY, n=1, cutoff=SPELLING_CUTOFF)
+        return close[0] if close else word
+    return re.sub(r"[A-Za-z]+", fix, text)
+
 
 def retrieve(query, k=2):
     """Return the top-k chunks for a query.
@@ -56,6 +79,7 @@ def retrieve(query, k=2):
     "similarity" keys. Note that Chroma reports *distances*, not
     similarities.
     """
+    query = correct_spelling(query)
     query_vector = embedding_model.encode(query, normalize_embeddings=True).tolist()
     results = _collection.query(
         query_embeddings=[query_vector],
