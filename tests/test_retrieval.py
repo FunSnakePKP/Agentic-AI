@@ -24,4 +24,4 @@ def test_retrieve_finds_relevant_passage():
     hits = retrieve("Is technical support available on weekends?", k=2)
     # TODO T1: assert that one of the retrieved chunks actually contains the
     # expected fact ("24/7"). Check the chunk's *text*, not its id.
-    assert ...
+    assert any("24/7" in h["text"] for h in hits)
