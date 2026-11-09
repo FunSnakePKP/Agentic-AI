@@ -5,6 +5,7 @@ half with a versioned prompt (TODO R3-R4) and the policy check
 (TODO R5-R6). rag_answer() at the bottom wires them together
 and records what the monitoring in Module 5 needs. It's already written.
 """
+import re
 import time
 from pathlib import Path
 
@@ -56,12 +57,21 @@ def retrieve(query, k=2):
     similarities.
     """
     query_vector = embedding_model.encode(query, normalize_embeddings=True).tolist()
-    results = _collection.query(query_embeddings=[query_vector], n_results=k)
+    results = _collection.query(
+        query_embeddings=[query_vector],
+        n_results=k,
+        include=["documents", "distances", "metadatas"],
+    )
     hits = []
-    for doc_id, text, distance in zip(
-        results["ids"][0], results["documents"][0], results["distances"][0]
+    for doc_id, text, distance, meta in zip(
+        results["ids"][0], results["documents"][0], results["distances"][0], results["metadatas"][0]
     ):
-        hits.append({"id": doc_id, "text": text, "similarity": 1 - distance})
+        hits.append({
+            "id": doc_id,
+            "text": text,
+            "similarity": 1 - distance,
+            "source": (meta or {}).get("source", "policy"),
+        })
     return hits
 
 
@@ -116,13 +126,44 @@ def generate_answer(prompt):
 SIMILARITY_THRESHOLD = 0.25
 
 
-def should_refuse(hits):
-    """AGENT_POLICY.md P1: refuse when nothing retrieved is relevant enough.
+# Words in a price row that don't identify one product: the brand name is in
+# every LumaBox model (and in many policy questions), "pro" in many products.
+GENERIC_PRODUCT_WORDS = {"lumabox", "pro"}
+_PRICE_ROW = re.compile(r"^The (.+) costs \d+ THB\.$")
 
-    TODO R6: return True when there are no hits, or when the top hit's
-    similarity is below SIMILARITY_THRESHOLD.
+
+def _words(text):
+    return set(re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*", text.lower()))
+
+
+def names_product(question, price_hit):
+    """True when the question names the product in this price row.
+
+    "LMX-202 LumaBox X200" is identified by "lmx-202" or "x200"; the shared
+    brand word "lumabox" alone doesn't count.
     """
-    return not hits or hits[0]["similarity"] < SIMILARITY_THRESHOLD
+    match = _PRICE_ROW.match(price_hit["text"])
+    if not match:
+        return False
+    return bool((_words(match.group(1)) - GENERIC_PRODUCT_WORDS) & _words(question))
+
+
+def should_refuse(hits, question=None):
+    """Decide whether the bot must refuse instead of answering.
+
+    AGENT_POLICY.md P1: refuse when there are no hits, or when the top hit's
+    similarity is below SIMILARITY_THRESHOLD.
+    AGENT_POLICY.md P9: when the best match is a price row, refuse unless the
+    question names a product from a retrieved price row. Products that
+    aren't in the table ("iPhone 15", "LumaBox X999") still look like price
+    questions to the embedding model, so similarity alone can't stop them.
+    """
+    if not hits or hits[0]["similarity"] < SIMILARITY_THRESHOLD:
+        return True
+    if question is not None and hits[0].get("source") == "price":
+        price_hits = [h for h in hits if h.get("source") == "price"]
+        return not any(names_product(question, h) for h in price_hits)
+    return False
 
 
 # ------------------------------------------------- the agent
@@ -152,7 +193,7 @@ def rag_answer(question, k=2, search_query=None, enforce_policy=True, prompt_ver
         "kb_version": kb_version(),
         "models": {"embedding": EMBEDDING_MODEL_NAME, "generator": GENERATOR_MODEL_NAME},
     }
-    if enforce_policy and should_refuse(hits):
+    if enforce_policy and should_refuse(hits, question):
         # Deterministic: the generator is never called.
         result.update(answer=REFUSAL_MESSAGE, refused=True)
     else:

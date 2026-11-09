@@ -1,4 +1,5 @@
-"""Build the local Chroma index from data/lumabox_policies.txt.
+"""Build the local Chroma index from data/lumabox_policies.txt and
+homework/model_prices.xlsx (one collection holds both).
 
 Unlike a clean JSON array, this is one raw text file - real documents
 usually arrive this way. You have to decide how to split it into
@@ -11,16 +12,19 @@ import hashlib
 from pathlib import Path
 
 import chromadb
+import pandas as pd
 from sentence_transformers import SentenceTransformer
 
-DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "lumabox_policies.txt"
-DB_PATH = Path(__file__).resolve().parent.parent / "chroma_db"
+ROOT = Path(__file__).resolve().parent.parent
+DATA_PATH = ROOT / "data" / "lumabox_policies.txt"
+PRICES_PATH = ROOT / "homework" / "model_prices.xlsx"
+DB_PATH = ROOT / "chroma_db"
 COLLECTION_NAME = "policies"
 
-# A short fingerprint of the source text. It changes whenever the documents
-# change, and every answer logs it, so a wrong answer can be traced back to
-# the exact knowledge it came from.
-KB_VERSION = hashlib.sha256(DATA_PATH.read_bytes()).hexdigest()[:12]
+# A short fingerprint of the source documents. It changes whenever any of
+# them change, and every answer logs it, so a wrong answer can be traced back
+# to the exact knowledge it came from.
+KB_VERSION = hashlib.sha256(DATA_PATH.read_bytes() + PRICES_PATH.read_bytes()).hexdigest()[:12]
 
 # TODO I1: load the embedding model "sentence-transformers/all-MiniLM-L6-v2"
 # with SentenceTransformer, on the CPU (device="cpu").
@@ -39,6 +43,16 @@ def chunk_documents():
     text = DATA_PATH.read_text(encoding="utf-8")
     raw_chunks = [c.strip() for c in text.split("\n\n")]
     return [c for c in raw_chunks if "\n" in c]
+
+
+def price_sentences():
+    """One sentence per row of the price table.
+
+    Embeddings work on sentences, not table cells. The model column is kept
+    as is (serial code and name run together, e.g. "LMX-201 LumaBox X100").
+    """
+    table = pd.read_excel(PRICES_PATH)
+    return [f"The {row.model} costs {int(row.price)} THB." for row in table.itertuples()]
 
 
 def build_index():
@@ -63,9 +77,26 @@ def build_index():
     # splitting, not handed to you pre-labeled.
     embeddings = embedding_model.encode(chunks, normalize_embeddings=True).tolist()
     ids = [f"chunk_{i}" for i in range(len(chunks))]
-    collection.add(ids=ids, documents=chunks, embeddings=embeddings)
+    collection.add(
+        ids=ids,
+        documents=chunks,
+        embeddings=embeddings,
+        metadatas=[{"source": "policy"}] * len(chunks),
+    )
 
-    print(f"Indexed {len(chunks)} chunks into {DB_PATH} (kb_version {KB_VERSION})")
+    # Prices go into the same collection, so one search covers both sources.
+    prices = price_sentences()
+    collection.add(
+        ids=[f"price_{i}" for i in range(len(prices))],
+        documents=prices,
+        embeddings=embedding_model.encode(prices, normalize_embeddings=True).tolist(),
+        metadatas=[{"source": "price"}] * len(prices),
+    )
+
+    print(
+        f"Indexed {len(chunks)} policy chunks and {len(prices)} prices into {DB_PATH} "
+        f"(kb_version {KB_VERSION})"
+    )
 
 
 if __name__ == "__main__":

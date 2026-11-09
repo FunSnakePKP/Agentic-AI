@@ -56,10 +56,10 @@ def test_retrieval_finds_the_evidence(row, question):
 @pytest.mark.parametrize("row, question", cases("refuse"))
 def test_out_of_scope_is_refused(row, question):
     hits = retrieve(question, k=2)
-    assert should_refuse(hits), f"not refused: top similarity {hits[0]['similarity']:.3f}"
+    assert should_refuse(hits, question), f"not refused: top similarity {hits[0]['similarity']:.3f}"
 
 
 @pytest.mark.parametrize("row, question", cases("answer"))
 def test_in_scope_is_not_refused(row, question):
     hits = retrieve(question, k=2)
-    assert not should_refuse(hits), f"wrongly refused: top similarity {hits[0]['similarity']:.3f}"
+    assert not should_refuse(hits, question), f"wrongly refused: top similarity {hits[0]['similarity']:.3f}"
