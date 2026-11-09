@@ -8,3 +8,5 @@ chroma_db/
 logs/
 tests/
 homework/
+# ...except the price table: src/ingest.py indexes it (Homework Exercise 1).
+!homework/model_prices.xlsx

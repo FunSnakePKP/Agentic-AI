@@ -28,6 +28,7 @@ AutoModelForSeq2SeqLM.from_pretrained('google/flan-t5-base')"
 COPY src/ src/
 COPY prompts/ prompts/
 COPY data/ data/
+COPY homework/model_prices.xlsx homework/
 COPY app.py AGENT_POLICY.md ./
 
 # 4. Build the knowledge base at build time, so every container from this
